@@ -1,0 +1,284 @@
+---
+title: "Heatmap mit Clusteranalye für Patienten -- außerdem Box-Whisker-Plots -- für drei cluster -- alle Aspekte"
+output:
+  pdf_document: default
+  html_document: default
+date: "2024-01-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Packages einlesen
+```{r}
+library("dplyr")
+library(dtplyr)
+library(readxl)
+library(compositions)
+library(cluster)
+library("ggplot2")
+library("ggdendro")
+library("tidyr")
+library("grid")
+
+options(scipen = 10)
+```
+
+# Daten einlesen
+```{r}
+#data_directory <- "Y:/Auswertung_Datenanalyse/DatenAnalyseMitR/"
+data_directory <- "Q:/NAS/IMiC/Auswertung_Datenanalyse/DatenAnalyseMitR/"
+Genus_Data <- read.csv(paste(data_directory,"A_Daten/20_OutPut_OutTables/Genus_Data.csv",sep = ""), sep=";")
+colnames(Genus_Data)[1:5]
+```
+
+# Daten auswählen
+Hier werden alle Genera betrachet für alle Patientendaten zur Visite 1.
+```{r}
+V1Data <- Genus_Data[grep("V1",Genus_Data$ID),]
+```
+ein check...
+```{r}
+print(paste("Entfernte Datensätze:",c(dim(Genus_Data)[1]-dim(V1Data)[1])))
+print(paste("Entfernte Genera:",c(dim(Genus_Data)[2]-dim(V1Data)[2])))
+print(paste("Restliche Daten:",dim(V1Data)))
+```
+```{r}
+Genus_Data <- V1Data
+```
+
+# Imputation (Nullen auffüllen)
+```{r}
+# Nullen auffüllenn
+nullen_auffuellen <- function(x){
+  tmp <- which(x == 0)
+  if(length(tmp) > 0){
+    x[tmp] <- 1e-3
+  }
+  return(t(x))
+}
+# Test: nullen_auffuellen(c(1,0,0.0001,100))
+# Test: nullen_auffuellen(c(1,2,0.0001,100))
+
+# Test: Selected_Genus_Data[1:10,2:10]
+# Test: apply(Selected_Genus_Data[1:10,2:10], MAR = 2, FUN = nullen_auffuellen)
+
+Genus_Data_NoZeros <- Genus_Data
+Genus_Data_NoZeros[,-1] <-
+  apply(Genus_Data[,-1], MAR = 2, FUN = nullen_auffuellen)
+Genus_Data_NoZeros[1:4,14]
+```
+
+# Normalisieren
+```{r}
+Genus_Data_norm <- Genus_Data_NoZeros
+Genus_Data_norm[,-1] <- Genus_Data_norm[,-1]/rowSums(Genus_Data_norm[,-1])
+# Test: Selected_Genus_Data_NoZeros[1:10,1:10]
+# Test: Selected_Genus_Data_norm[1:10,1:10]
+```
+
+# ilr-Transformation
+```{r}
+ilr_Genus_Data <- ilr(Genus_Data_norm[,-1])
+rownames(ilr_Genus_Data) <- Genus_Data_norm[,1]
+ilr_Genus_Data[1:10,1:5]
+```
+check: Es müssen zwei Spalten weniger sein
+
+* die IDs werden nicht normalisiert und gelangen nicht in die ilr-Transformation!
+* Durch die ilr-Transformation wird die Dimension um 1 vermindert.
+```{r}
+dim(Genus_Data)[2] - dim(ilr_Genus_Data)[2]
+```
+# Clustern
+
+```{r}
+method = "ward"
+my.agnes <- agnes(x=ilr_Genus_Data, 
+                  diss =FALSE, 
+                  metric = "euclidean", 
+                  method = method)
+namen.der.cluster.bestandteile <-
+    my.agnes$order.lab
+my.agnes$order
+```
+
+
+
+Quelle ist: https://jcoliver.github.io/learn-r/008-ggplot-dendrograms-and-heatmaps.html
+```{r}
+dend <- as.dendrogram(my.agnes)
+  dendro_plot <- ggdendrogram(data = dend, rotate = TRUE)
+  # Preview the plot
+  print(dendro_plot)
+  
+  
+  DataForHeatMap_long <- pivot_longer(data = Genus_Data_norm,
+                             cols = -ID,
+                             names_to = "measurement",
+                             values_to = "value")
+
+  
+  # Re-order heatmap rows to match dendrogram
+  dend_order <- order.dendrogram(dend)
+
+  
+
+  DataForHeatMap_long$ID <- factor(x = DataForHeatMap_long$ID,
+                                 levels = my.agnes$order.lab, 
+                                 ordered = TRUE)  
+  
+  dfh <- DataForHeatMap_long[DataForHeatMap_long$value >= 0.1,]
+  these_genera <- unique(dfh$measurement)
+  DataForHeatMap_long_extract <- filter(DataForHeatMap_long,measurement %in% these_genera)
+```
+
+
+```{r}
+heatmap_plot <- ggplot(data = DataForHeatMap_long_extract, aes(x = measurement, y = ID)) +
+    geom_tile(aes(fill = value)) +
+    scale_fill_gradient2()  +
+  theme(axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_text(size = 12,angle = 90),
+        legend.position = "top")
+heatmap_plot
+```
+
+# Grafik als Datei speichern
+Die Parameter müssen hier geändert werden, denn die Gestalt der Grafik hängt vom Dateiformat ab!
+```{r}
+#pdf(paste(data_directory,"K_ClusterMitHeatmap_BEISPIEL/NurPatienten_14Spalten.pdf",sep = ""), 
+#    height = 11, width = 8.5, paper = "letter")
+  grid.newpage()
+  print(heatmap_plot, 
+        vp = viewport(x = 0.2, y = 0.5, width = 0.4, height = 1.0))
+  print(dendro_plot, 
+        vp = viewport(x = 0.70, y = 0.52, width = 0.5, height = 0.83))
+#  dev.off()
+  
+```
+# Cluster auswerten
+
+```{r}
+namen.der.cluster.bestandteile <-
+  my.agnes$order.lab
+```
+
+## Namen anpasen (kürzer machen)
+```{r}
+short_names <- function(x){substr(x,1,6)}
+kurz.namen.der.cluster.bestandteile <-
+  data.frame(ID = sapply(namen.der.cluster.bestandteile, short_names))
+#head(kurz.namen.der.cluster.bestandteile)
+
+my.agnes$order.lab <- kurz.namen.der.cluster.bestandteile$ID
+```
+
+## Wieviele Cluster
+```{r}
+# hier auswählen, wie viele Cluster zu betracheten sind
+cluster_grouping <- cutree(my.agnes, k=3)
+```
+
+## Cluster Daten auswählen
+```{r}
+cluster_grouping <- 
+  data.frame(StudyID =  sapply(Genus_Data_norm$ID, short_names),
+             ClusterNr = cluster_grouping)
+cluster_grouping <- cluster_grouping[order(cluster_grouping$ClusterNr),]
+cluster_grouping
+```
+## manuelle Veränderung 
+
+```{r}
+tmp <- which(substr(cluster_grouping$StudyID,1,3) %in% c("P21","P20","P17","P15"))
+cluster_grouping$ClusterNr[tmp] <- 2
+tmp <- which(substr(cluster_grouping$StudyID,1,3) %in% c("P04","P16","P13"))
+cluster_grouping$ClusterNr[tmp] <- 3
+```
+Study-ID anpassen....
+
+```{r}
+cluster_grouping$StudyID <- substr(cluster_grouping$StudyID,1,3)
+```
+
+Kontrolle
+```{r}
+cluster_grouping
+```
+
+
+
+## Für alle Aspekte
+```{r}
+avail_aspects <- c("GlobalGutPerfusion",
+                   "GlobalGutPerfusionPerBirthWeight",
+                   "iFTOE")
+aspect <- avail_aspects[1]
+#
+for(aspect in avail_aspects){
+  # Meta-Daten einlesen
+  MetaData <- 
+    data.frame(read_excel("AdditionalDataForClusters.xlsx"))
+  
+  #MetaData <- data.frame(read_excel("A_Daten/Update_Daten_SpO2_zyanot.xlsx"))
+  index_of_interesting_data <- which(colnames(MetaData) == aspect)
+  mdata <- MetaData[,c(1,index_of_interesting_data)]
+  
+  mdata$StudyID <- 
+    substr(mdata$StudyID,6,8)
+  
+  # Joinen
+  joined.meta.data <-
+    left_join(x = cluster_grouping, 
+              y = mdata, by = "StudyID")
+  
+  # 33 wurde als NA-Wert benutzt
+  NA_index <- which(joined.meta.data[,3] == 33)
+  if(length(NA_index) > 0){
+    joined.meta.data[NA_index,4] <- NA 
+  }
+  
+  x <- as.numeric(filter(joined.meta.data,ClusterNr == 1)[,3])
+  y <- as.numeric(filter(joined.meta.data,ClusterNr == 2)[,3]) 
+  med_x <- median(x, na.rm = TRUE)
+  med_y <- median(y, na.rm = TRUE)
+  
+  (alt = ifelse(med_x < med_y, "less", "greater"))
+  
+  pv_12 <-
+    wilcox.test(x,y, alternative = alt)$p.val
+  pv_12 <- round(pv_12,2)
+  
+  # wird nur bei mehr als zwei Clustern benötigt
+  x <- as.numeric(filter(joined.meta.data,ClusterNr == 1)[,3])
+  y <- as.numeric(filter(joined.meta.data,ClusterNr == 3)[,3])                
+  if(median(x, na.rm = TRUE) < median(y, na.rm = TRUE)){alt = "less"}else{alt = "greater"}
+  pv_13 <-
+    wilcox.test(x,y, alternative = alt)$p.val
+  pv_13 <- round(pv_13,2)
+  
+  x <- as.numeric(filter(joined.meta.data,ClusterNr == 2)[,3])
+  y <- as.numeric(filter(joined.meta.data,ClusterNr == 3)[,3])                
+  if(median(x, na.rm = TRUE) < median(y, na.rm = TRUE)){alt = "less"}else{alt = "greater"}
+  pv_23 <-
+    wilcox.test(x,y, alternative = alt)$p.val
+  pv_23 <- round(pv_23,2)
+  
+  par(mar = c(6, 6, 6, 6) + 0.1)
+  tiff(paste("HeatMapAuswertung3ClusterAlleAspekte\\BoxWhisker_",
+             aspect,".tiff", sep = ""), 
+       res = 600,
+        width = 3000, height = 3000, units = "px",)
+  boxplot(as.numeric(joined.meta.data[,3]) ~ round(joined.meta.data$ClusterNr,0),
+          xlab = "Cluster Number", ylab = aspect,
+          main = paste("p values:\n1 vs. 2:", pv_12, ", 2 vs. 3:", pv_23, ", 1 vs. 3: ", pv_13),
+          col = c("red","grey","blue"))
+  dev.off()
+}
+```
+
